@@ -5,7 +5,7 @@ from torch.nn import functional as F
 
 import numpy as np
 import pickle as pkl
-from data import load_data, preprocess_adj
+from data import preprocess_adj
 from model import GCN
 from config import args
 
@@ -31,7 +31,7 @@ device = torch.device('cpu')
 X_all = torch.from_numpy(X_all).to(device)
 
 supports = preprocess_adj(adj)
-i = torch.from_numpy(supports[0]).long().to(device)
+i = torch.from_numpy(supports[0]).long().to(device) # i.shape = (6810490, 2)
 v = torch.from_numpy(supports[1]).to(device)
 support = torch.sparse.DoubleTensor(i.t(), v, supports[2]).to(device)
 
