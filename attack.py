@@ -139,4 +139,7 @@ for epoch in range(args.attack_epochs):
 # 'fake_k': attack test nodes within [100 * size_attack * k, 100 * size_attack * (k+1))
 file_path = 'fake_' + str(kk) + '.pkl'
 f = open(file_path, 'wb')
-pkl.dump(X_attack[-size_attack:], f)
+dic = dict()
+dic['seed'] = seed
+dic['feat'] = X_attack[-size_attack:]
+pkl.dump(dic, f)
