@@ -6,23 +6,14 @@ from    scipy.sparse.linalg.eigen.arpack import eigsh
 import  sys
 
 
-def parse_index_file(filename):
-    """
-    Parse index file.
-    """
-    index = []
-    for line in open(filename):
-        index.append(int(line.strip()))
-    return index
-
-
-def sample_mask(idx, l):
-    """
-    Create mask.
-    """
-    mask = np.zeros(l)
-    mask[idx] = 1
-    return np.array(mask, dtype=np.bool)
+def sparse_symmetric_add(sparse_mx, row, col, size):
+    mx = sparse_mx.tocoo()
+    # mx.row: ndarray (6217004, )
+    new_row = np.concatenate([mx.row, row, col])
+    new_col = np.concatenate([mx.col, col, row])
+    data = np.ones(new_row.shape[0])
+    ret = sp.csr_matrix((data, (new_row, new_col)), shape=(size, size))
+    return ret
 
 
 def sparse_to_tuple(sparse_mx):
@@ -46,22 +37,11 @@ def sparse_to_tuple(sparse_mx):
     return sparse_mx
 
 
-def preprocess_features(features):
-    """
-    Row-normalize feature matrix and convert to tuple representation
-    """
-    rowsum = np.array(features.sum(1)) # get sum of each row, [2708, 1]
-    r_inv = np.power(rowsum, -1).flatten() # 1/rowsum, [2708]
-    r_inv[np.isinf(r_inv)] = 0. # zero inf data
-    r_mat_inv = sp.diags(r_inv) # sparse diagonal matrix, [2708, 2708]
-    features = r_mat_inv.dot(features) # D^-1:[2708, 2708]@X:[2708, 2708]
-    return sparse_to_tuple(features) # [coordinates, data, shape], []
-
-
 def normalize_adj(adj):
     """Symmetrically normalize adjacency matrix."""
     # adj = sp.coo_matrix(adj)
     rowsum = np.array(adj.sum(1)) # D
+    #print(np.argwhere((rowsum == 0)))
     d_inv_sqrt = np.power(rowsum, -0.5).flatten() # D^-0.5
     d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
     d_mat_inv_sqrt = sp.diags(d_inv_sqrt) # D^-0.5
@@ -75,31 +55,3 @@ def preprocess_adj(adj):
     # return sparse_to_tuple(adj_normalized)
     adj_normalized = normalize_adj(adj)
     return sparse_to_tuple(adj_normalized + sp.eye(adj.shape[0]))
-
-
-
-
-
-def chebyshev_polynomials(adj, k):
-    """
-    Calculate Chebyshev polynomials up to order k. Return a list of sparse matrices (tuple representation).
-    """
-    print("Calculating Chebyshev polynomials up to order {}...".format(k))
-
-    adj_normalized = normalize_adj(adj)
-    laplacian = sp.eye(adj.shape[0]) - adj_normalized
-    largest_eigval, _ = eigsh(laplacian, 1, which='LM')
-    scaled_laplacian = (2. / largest_eigval[0]) * laplacian - sp.eye(adj.shape[0])
-
-    t_k = list()
-    t_k.append(sp.eye(adj.shape[0]))
-    t_k.append(scaled_laplacian)
-
-    def chebyshev_recurrence(t_k_minus_one, t_k_minus_two, scaled_lap):
-        s_lap = sp.csr_matrix(scaled_lap, copy=True)
-        return 2 * s_lap.dot(t_k_minus_one) - t_k_minus_two
-
-    for i in range(2, k+1):
-        t_k.append(chebyshev_recurrence(t_k[-1], t_k[-2], scaled_laplacian))
-
-    return sparse_to_tuple(t_k)
