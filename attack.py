@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from config import args
 
 # TODO: feel free to change lr & seed
-lr = 0.2
+lr = 0.1
 lr_decay = 0.9
-seed = 43
+seed = args.seed
 np.random.seed(seed)
 torch.random.manual_seed(seed)
 
@@ -57,8 +57,8 @@ num_classes = 18
 # add attack nodes and edges           #
 ########################################
 # TODO: feel free to change size_attack
-size_attack = 5
-kk = 0  # 0 <= kk < 500//size_attack
+size_attack = args.size
+kk = args.kk  # 0 <= kk < 500//size_attack
 offset = kk * size_attack * 100
 row = []
 for i in range(size_attack):
@@ -70,8 +70,6 @@ col = np.array(list(range(size_attack * 100))) + num_train_val + offset
 new_adj = sparse_symmetric_add(adj, row, col, num_all + size_attack)
 
 # X_attack = 0.5 * torch.randn((size_attack, 100)).double()
-z = 0.5 * torch.randn((size_attack, 100)).double()
-X_attack = torch.cat((X_all, z), dim=0)
 # print(X_attack.shape)  # (593986, 100)
 
 supports = preprocess_adj(new_adj)
@@ -93,19 +91,28 @@ def max_loss(logits, test_labels):
         loss += torch.max(x) - x[y]
     return loss
 
-# TODO: 'gpu' or 'cuda'
-device = torch.device('cpu')
-X_attack = X_attack.to(device)
+# TODO: 'cuda'
+device = torch.device(args.dev)
+print(device)
+# device = torch.device('cuda')
+z = 0.5 * torch.randn((size_attack, 100)).double().to(device)
+# X_attack = X_attack.to(device)
+X_all = X_all.to(device)
 support = support.to(device)
 y_test = y_test.to(device)
 
 
 net = GCN(feature_dim, num_classes).to(device)
 net.load_state_dict(torch.load('parameters0.48.pkl', map_location=device))
+# net = net.to(device)
 net.eval()
-X_attack.requires_grad = True
+# X_attack.requires_grad = True
+z.requires_grad = True
 test_label_mask = (torch.tensor(list(range(size_attack * 100))) + offset).to(device)
-test_logits_mask = (test_label_mask + num_train_val + offset).to(device)
+test_logits_mask = (test_label_mask + num_train_val).to(device)
+# fnode_mask = torch.zeros(num_all + size_attack).double()
+# fnode_mask[-size_attack:0] = 1.
+# fnode_mask = fnode_mask.reshape(-1, 1)
 min_f = -2.2
 max_f = 2.6
 
@@ -114,23 +121,34 @@ for epoch in range(args.attack_epochs):
     epoch += 1
     print('epoch:', epoch)
 
+    X_attack = torch.cat((X_all, z), dim=0).to(device)
     out = net((X_attack, support))
-    logits = out[0]  # shape = (num_all + #attack nodes, 18)
+    logits = out[0].to(device)  # shape = (num_all + #attack nodes, 18)
 
-    loss = max_loss(logits[test_logits_mask], y_test[test_label_mask])
+    loss = max_loss(logits[test_logits_mask], y_test[test_label_mask]).to(device)
     print('loss:', loss)
 
-    dx = torch.autograd.grad(outputs=loss, inputs=X_attack)[0]  # tuple: (tensor,)
+    loss.backward()
+    # dz = torch.autograd.grad(outputs=loss, inputs=z)[0]  # tuple: (tensor,)
+    dz = z.grad
     print('derivative done.')
     if epoch % 5 == 0:
         lr = lr * lr_decay
-    X_attack[-size_attack:] += lr * dx[-size_attack:]
-    X_attack[-size_attack:] = torch.clamp(X_attack[-size_attack:], min_f, max_f)
+    z.data += lr * dz  # instead of 'z += lr * dz'
+    z.data = torch.clamp(z.data, min_f, max_f)
+    '''dz = z.grad
+    print(type(dz))
+    # X_attack = X_attack.clone() + lr * dx * fnode_mask  # not in-place
+    z += lr * dz.clone()  # not in-place
+    print(type(z))'''
+    # X_attack[-size_attack:] = torch.clamp(X_attack[-size_attack:].clone(), min_f, max_f)
 
     acc = (torch.argmax(logits[test_logits_mask], dim=1) == y_test[test_label_mask]).double().mean()
     print('test acc:', acc.item())
-    print('max:', torch.max(X_attack[-size_attack:]).item(), 'min:', torch.min(X_attack[-size_attack:]).item())
+    print('max:', torch.max(z).item(), 'min:', torch.min(z).item())
     print()
+
+print('z[0]:', z[0])
 
 # acc = (torch.argmax(logits[val_mask], dim=1) == y_train[val_mask]).float().mean()
 # print(acc.item())
@@ -141,5 +159,5 @@ file_path = 'fake_' + str(kk) + '.pkl'
 f = open(file_path, 'wb')
 dic = dict()
 dic['seed'] = seed
-dic['feat'] = X_attack[-size_attack:]
+dic['feat'] = z
 pkl.dump(dic, f)
