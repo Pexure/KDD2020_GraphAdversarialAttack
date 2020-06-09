@@ -1,11 +1,13 @@
 import pickle as pkl
 import math as m
+from col_design import get_col
 from model import GCN
 import torch
 from data import preprocess_adj, sparse_symmetric_add
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
+from torch import optim
 from config import args
 
 # TODO: feel free to change lr & seed
@@ -54,8 +56,9 @@ offset = kk * size_attack * 100
 row = []
 for i in range(size_attack):
     row.append([i] * 100)
-row = np.concatenate(row) + num_all # [0,0,0...1,1,1...4,4,4]
-col = np.array(list(range(size_attack * 100))) + num_train_val + offset
+row = np.concatenate(row) + num_all  # [0,0,0...1,1,1...4,4,4]
+col = np.array(get_col()[:size_attack * 100]) + num_train_val + offset
+# col = np.array(list(range(size_attack * 100))) + num_train_val + offset
 new_adj = sparse_symmetric_add(adj, row, col, num_all + size_attack)
 
 supports = preprocess_adj(new_adj)
@@ -87,8 +90,10 @@ print(device)
 
 sigma = 0.3
 mu = 0.
-z = (sigma * torch.randn((size_attack, 100)) - mu).double()
+z = (sigma * torch.randn((size_attack, feature_dim)) - mu).double()
 # z = (sigma * torch.rand((size_attack, 100)) - mu).double()
+# z = torch.zeros((size_attack, feature_dim)).double()
+# z[:, 0] += 1
 # print('z[0] variance:', torch.var(z[0]).item())
 
 X_all = X_all.to(device)
@@ -101,12 +106,11 @@ net = GCN(feature_dim, num_classes)
 net.load_state_dict(torch.load('parameters0.48.pkl', map_location=device))
 net = net.to(device)
 net.eval()
-# X_attack.requires_grad = True
 z.requires_grad = True
+optimizer = optim.SGD([z], lr=lr)
+
 test_label_mask = (torch.tensor(list(range(size_attack * 100))) + offset).to(device)
 test_logits_mask = (test_label_mask + num_train_val).to(device)
-max_f = 1.4
-min_f = -1.4
 
 
 print('start')
@@ -125,11 +129,12 @@ for epoch in range(args.attack_epochs):
     loss = max_loss(logits[test_logits_mask], y_test[test_label_mask], device)
     print('loss:', loss)
 
+    optimizer.zero_grad()
     loss.backward()
     dz = z.grad
     if epoch % 5 == 0:
         lr = lr * lr_decay
-    z.data += lr * dz  # instead of 'z += lr * dz'
+    z.data += lr * dz  # bug: 'z += lr * dz'; optimizer.step() is OK either
     # z.data = torch.clamp(z.data, min_f, max_f)
     # X_attack[-size_attack:] = torch.clamp(X_attack[-size_attack:].clone(), min_f, max_f)
 
