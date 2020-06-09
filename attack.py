@@ -1,4 +1,5 @@
 import pickle as pkl
+import math as m
 from model import GCN
 import torch
 from data import preprocess_adj, sparse_symmetric_add
@@ -8,7 +9,7 @@ import torch.nn.functional as F
 from config import args
 
 # TODO: feel free to change lr & seed
-lr = 1
+lr = args.attack_lr
 lr_decay = 0.9
 seed = args.seed
 np.random.seed(seed)
@@ -17,7 +18,7 @@ torch.random.manual_seed(seed)
 ###################################
 # load data                       #
 ###################################
-y_train = pkl.load(open('../experimental_train.pkl', 'rb'))  # np.ndarray; (543486,); label within [0, 17]
+# y_train = pkl.load(open('../experimental_train.pkl', 'rb'))  # np.ndarray; (543486,); label within [0, 17]
 y_test = pkl.load(open('y_test.pkl', 'rb'))  # tensor; (50000,); label within [0, 17]
 adj = pkl.load(open('../experimental_adj.pkl', 'rb'))  # sparse.csr.csr_matrix (593486, 593486)
 X_all = pkl.load(open('../experimental_features.pkl', 'rb'))  # numpy.ndarray (593486, 100)
@@ -28,25 +29,15 @@ X_all = pkl.load(open('../experimental_features.pkl', 'rb'))  # numpy.ndarray (5
 # preprocess                      #
 ###################################
 X_all = torch.from_numpy(X_all)
-
-'''supports = preprocess_adj(adj)
-i = torch.from_numpy(supports[0]).long()  # i.shape = (6810490, 2)
-v = torch.from_numpy(supports[1])  # tensor (6810490, )
-adj_shape = supports[2]
-support = torch.sparse.DoubleTensor(i.t(), v, adj_shape)'''
-
-y_train = torch.from_numpy(y_train).long()  # why long? int64
+# for i in range(10):
+#     print(torch.var(X_all[i]).item(), torch.mean(X_all[i]).item())
+# x[i]: mean around 0; variance around 0.1
+# print(torch.max(X_all[0]).item(), torch.min(X_all[0]).item())
 
 # mask
 num_all = X_all.shape[0]
-num_train_val = y_train.shape[0]
-num_train = round(num_train_val * 0.8)
-num_val = num_train_val - num_train
 num_test = 50000
-'''perm = torch.randperm(num_train_val)
-train_mask = perm[:num_train]
-val_mask = perm[num_train:num_train_val]
-test_mask = torch.tensor(list(range(50000))) + num_train_val'''
+num_train_val = num_all - num_test
 # feature_dim = X_all.shape[1]
 feature_dim = 100
 num_classes = 18
@@ -64,13 +55,8 @@ row = []
 for i in range(size_attack):
     row.append([i] * 100)
 row = np.concatenate(row) + num_all # [0,0,0...1,1,1...4,4,4]
-# row = list(range(size_attack)) * 100
-# row = np.array(row) + num_all
 col = np.array(list(range(size_attack * 100))) + num_train_val + offset
 new_adj = sparse_symmetric_add(adj, row, col, num_all + size_attack)
-
-# X_attack = 0.5 * torch.randn((size_attack, 100)).double()
-# print(X_attack.shape)  # (593986, 100)
 
 supports = preprocess_adj(new_adj)
 i = torch.from_numpy(supports[0]).long()  # i.shape = (6810490, 2)
@@ -83,12 +69,15 @@ support = torch.sparse.DoubleTensor(i.t(), v, adj_shape)
 ############################################
 # train attack nodes features              #
 ############################################
-def max_loss(logits, test_labels):
-    loss = torch.tensor(0).double()
+def max_loss(logits, test_labels, dev):
+    a = F.softmax(logits, dim=1).to(dev)
+    loss = torch.sum(torch.max(a, dim=1)[0] - a[range(len(test_labels)), test_labels]).to(dev)
+    '''loss = torch.tensor(0).double().to(device)
     for x, y in zip(logits, test_labels):
         # x.shape = (18,)
         x = F.softmax(x, dim=0)
-        loss += torch.max(x) - x[y]
+        loss += torch.max(x) - x[y]'''
+    # bug fixed: didn't flush loss to device
     return loss
 
 # TODO: 'cuda'
@@ -96,20 +85,19 @@ device = torch.device(args.dev)
 print(device)
 # device = torch.device('cuda')
 
-sigma = 10
-mu = 50
-z = (sigma * torch.randn((size_attack, 100)) + mu).double()
-z[(z > 50)] -= 100
-z = z.to(device)
-# print(torch.max(z), torch.min(z))
-# exit(0)
+sigma = 0.3
+mu = 0.
+z = (sigma * torch.randn((size_attack, 100)) - mu).double()
+# z = (sigma * torch.rand((size_attack, 100)) - mu).double()
+# print('z[0] variance:', torch.var(z[0]).item())
 
 X_all = X_all.to(device)
 support = support.to(device)
 y_test = y_test.to(device)
+z = z.to(device)
 
 
-net = GCN(feature_dim, num_classes).to(device)
+net = GCN(feature_dim, num_classes)
 net.load_state_dict(torch.load('parameters0.48.pkl', map_location=device))
 net = net.to(device)
 net.eval()
@@ -117,35 +105,37 @@ net.eval()
 z.requires_grad = True
 test_label_mask = (torch.tensor(list(range(size_attack * 100))) + offset).to(device)
 test_logits_mask = (test_label_mask + num_train_val).to(device)
-min_f = -2.2
-max_f = 2.5
+max_f = 1.4
+min_f = -1.4
+
 
 print('start')
 for epoch in range(args.attack_epochs):
     epoch += 1
     print('epoch:', epoch)
 
-    # z_norm = z / torch.max(z, dim=0)[0].reshape(size_attack, -1) * max_f
-    z_norm = (z / 100.0 * max_f).to(device)
+    z_std = torch.std(z, dim=1).reshape(-1, 1).to(device)
+    z_mean = torch.mean(z, dim=1).reshape(-1, 1).to(device)
+    z_norm = ((z - z_mean) / z_std * m.sqrt(0.1)).to(device)
+
     X_attack = torch.cat((X_all, z_norm), dim=0).to(device)
     out = net((X_attack, support))
     logits = out[0].to(device)  # shape = (num_all + #attack nodes, 18)
 
-    loss = max_loss(logits[test_logits_mask], y_test[test_label_mask]).to(device)
+    loss = max_loss(logits[test_logits_mask], y_test[test_label_mask], device)
     print('loss:', loss)
 
     loss.backward()
-    # dz = torch.autograd.grad(outputs=loss, inputs=z)[0]  # tuple: (tensor,)
     dz = z.grad
-    print('derivative done.')
     if epoch % 5 == 0:
         lr = lr * lr_decay
     z.data += lr * dz  # instead of 'z += lr * dz'
-    z.data = torch.clamp(z.data, -99.99, 99.99)
+    # z.data = torch.clamp(z.data, min_f, max_f)
     # X_attack[-size_attack:] = torch.clamp(X_attack[-size_attack:].clone(), min_f, max_f)
 
     acc = (torch.argmax(logits[test_logits_mask], dim=1) == y_test[test_label_mask]).double().mean()
     print('test acc:', acc.item())
+    # print('var:', z_std[0].item() ** 2, 'mean:', z_mean[0].item())
     print('max:', torch.max(z).item(), 'min:', torch.min(z).item())
     print()
 
