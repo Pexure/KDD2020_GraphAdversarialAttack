@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from config import args
 
 # TODO: feel free to change lr & seed
-lr = 0.1
+lr = 1
 lr_decay = 0.9
 seed = args.seed
 np.random.seed(seed)
@@ -95,8 +95,15 @@ def max_loss(logits, test_labels):
 device = torch.device(args.dev)
 print(device)
 # device = torch.device('cuda')
-z = 0.5 * torch.randn((size_attack, 100)).double().to(device)
-# X_attack = X_attack.to(device)
+
+sigma = 10
+mu = 50
+z = (sigma * torch.randn((size_attack, 100)) + mu).double()
+z[(z > 50)] -= 100
+z = z.to(device)
+# print(torch.max(z), torch.min(z))
+# exit(0)
+
 X_all = X_all.to(device)
 support = support.to(device)
 y_test = y_test.to(device)
@@ -104,24 +111,23 @@ y_test = y_test.to(device)
 
 net = GCN(feature_dim, num_classes).to(device)
 net.load_state_dict(torch.load('parameters0.48.pkl', map_location=device))
-# net = net.to(device)
+net = net.to(device)
 net.eval()
 # X_attack.requires_grad = True
 z.requires_grad = True
 test_label_mask = (torch.tensor(list(range(size_attack * 100))) + offset).to(device)
 test_logits_mask = (test_label_mask + num_train_val).to(device)
-# fnode_mask = torch.zeros(num_all + size_attack).double()
-# fnode_mask[-size_attack:0] = 1.
-# fnode_mask = fnode_mask.reshape(-1, 1)
 min_f = -2.2
-max_f = 2.6
+max_f = 2.5
 
 print('start')
 for epoch in range(args.attack_epochs):
     epoch += 1
     print('epoch:', epoch)
 
-    X_attack = torch.cat((X_all, z), dim=0).to(device)
+    # z_norm = z / torch.max(z, dim=0)[0].reshape(size_attack, -1) * max_f
+    z_norm = (z / 100.0 * max_f).to(device)
+    X_attack = torch.cat((X_all, z_norm), dim=0).to(device)
     out = net((X_attack, support))
     logits = out[0].to(device)  # shape = (num_all + #attack nodes, 18)
 
@@ -135,12 +141,7 @@ for epoch in range(args.attack_epochs):
     if epoch % 5 == 0:
         lr = lr * lr_decay
     z.data += lr * dz  # instead of 'z += lr * dz'
-    z.data = torch.clamp(z.data, min_f, max_f)
-    '''dz = z.grad
-    print(type(dz))
-    # X_attack = X_attack.clone() + lr * dx * fnode_mask  # not in-place
-    z += lr * dz.clone()  # not in-place
-    print(type(z))'''
+    z.data = torch.clamp(z.data, -99.99, 99.99)
     # X_attack[-size_attack:] = torch.clamp(X_attack[-size_attack:].clone(), min_f, max_f)
 
     acc = (torch.argmax(logits[test_logits_mask], dim=1) == y_test[test_label_mask]).double().mean()
