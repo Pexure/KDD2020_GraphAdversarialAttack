@@ -2,8 +2,7 @@ import  numpy as np
 import  pickle as pkl
 import  networkx as nx
 import  scipy.sparse as sp
-from    scipy.sparse.linalg.eigen.arpack import eigsh
-import  sys
+from config import args
 
 
 def sparse_symmetric_add(sparse_mx, row, col, size):
@@ -53,5 +52,5 @@ def preprocess_adj(adj):
     """Preprocessing of adjacency matrix for simple GCN model and conversion to tuple representation."""
     # adj_normalized = normalize_adj(adj + sp.eye(adj.shape[0]))
     # return sparse_to_tuple(adj_normalized)
-    adj_normalized = normalize_adj(adj)
-    return sparse_to_tuple(adj_normalized + sp.eye(adj.shape[0]))
+    adj_normalized = normalize_adj(adj + args.eye * sp.eye(adj.shape[0]))
+    return sparse_to_tuple(adj_normalized)

@@ -21,7 +21,7 @@ torch.random.manual_seed(seed)
 # load data                       #
 ###################################
 # y_train = pkl.load(open('../experimental_train.pkl', 'rb'))  # np.ndarray; (543486,); label within [0, 17]
-y_test = pkl.load(open('y_test.pkl', 'rb'))  # tensor; (50000,); label within [0, 17]
+y_test = pkl.load(open('./data/y_test.pkl', 'rb'))  # tensor; (50000,); label within [0, 17]
 adj = pkl.load(open('../experimental_adj.pkl', 'rb'))  # sparse.csr.csr_matrix (593486, 593486)
 X_all = pkl.load(open('../experimental_features.pkl', 'rb'))  # numpy.ndarray (593486, 100)
 
@@ -73,13 +73,9 @@ support = torch.sparse.DoubleTensor(i.t(), v, adj_shape)
 # train attack nodes features              #
 ############################################
 def max_loss(logits, test_labels, dev):
-    a = F.softmax(logits, dim=1).to(dev)
+    # a = F.softmax(logits, dim=1).to(dev)
+    a = logits
     loss = torch.sum(torch.max(a, dim=1)[0] - a[range(len(test_labels)), test_labels]).to(dev)
-    '''loss = torch.tensor(0).double().to(device)
-    for x, y in zip(logits, test_labels):
-        # x.shape = (18,)
-        x = F.softmax(x, dim=0)
-        loss += torch.max(x) - x[y]'''
     # bug fixed: didn't flush loss to device
     return loss
 
@@ -88,10 +84,12 @@ device = torch.device(args.dev)
 print(device)
 # device = torch.device('cuda')
 
-sigma = 0.3
-mu = 0.
-z = (sigma * torch.randn((size_attack, feature_dim)) - mu).double()
-# z = (sigma * torch.rand((size_attack, 100)) - mu).double()
+sigma = args.sigma
+mu = args.mu
+if args.init_z == 'randn':
+    z = (sigma * torch.randn((size_attack, feature_dim)) - mu).double()
+else:
+    z = (sigma * torch.rand((size_attack, 100)) - mu).double()
 # z = torch.zeros((size_attack, feature_dim)).double()
 # z[:, 0] += 1
 # print('z[0] variance:', torch.var(z[0]).item())
@@ -103,7 +101,7 @@ z = z.to(device)
 
 
 net = GCN(feature_dim, num_classes)
-net.load_state_dict(torch.load('parameters0.48.pkl', map_location=device))
+net.load_state_dict(torch.load('./data/param_eye1_39.pkl', map_location=device))
 net = net.to(device)
 net.eval()
 z.requires_grad = True
@@ -114,15 +112,16 @@ test_logits_mask = (test_label_mask + num_train_val).to(device)
 
 
 print('start')
+print('z[0]:', z[0])
 for epoch in range(args.attack_epochs):
     epoch += 1
     print('epoch:', epoch)
 
-    z_std = torch.std(z, dim=1).reshape(-1, 1).to(device)
+    '''z_std = torch.std(z, dim=1).reshape(-1, 1).to(device)
     z_mean = torch.mean(z, dim=1).reshape(-1, 1).to(device)
-    z_norm = ((z - z_mean) / z_std * m.sqrt(0.1)).to(device)
+    z_norm = ((z - z_mean) / z_std * m.sqrt(0.1)).to(device)'''
 
-    X_attack = torch.cat((X_all, z_norm), dim=0).to(device)
+    X_attack = torch.cat((X_all, z), dim=0).to(device)
     out = net((X_attack, support))
     logits = out[0].to(device)  # shape = (num_all + #attack nodes, 18)
 
@@ -135,8 +134,7 @@ for epoch in range(args.attack_epochs):
     if epoch % 5 == 0:
         lr = lr * lr_decay
     z.data += lr * dz  # bug: 'z += lr * dz'; optimizer.step() is OK either
-    # z.data = torch.clamp(z.data, min_f, max_f)
-    # X_attack[-size_attack:] = torch.clamp(X_attack[-size_attack:].clone(), min_f, max_f)
+    z.data = torch.clamp(z.data, -99.99, 99.99)
 
     acc = (torch.argmax(logits[test_logits_mask], dim=1) == y_test[test_label_mask]).double().mean()
     print('test acc:', acc.item())
@@ -152,8 +150,8 @@ print('z[0]:', z[0])
 # one fake node attacks 100 test nodes
 # 'fake_k': attack test nodes within [100 * size_attack * k, 100 * size_attack * (k+1))
 file_path = 'fake_' + str(kk) + '.pkl'
-f = open(file_path, 'wb')
+# f = open(file_path, 'wb')
 dic = dict()
 dic['seed'] = seed
 dic['feat'] = z
-pkl.dump(dic, f)
+torch.save(dic, file_path)

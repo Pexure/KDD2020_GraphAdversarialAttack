@@ -12,7 +12,7 @@ from config import args
 # TODO:
 # feel free to change seed or not
 # hyperparameters tuning: config.py   priority: dropout > learning_rate > hidden
-seed = 42
+seed = args.seed
 np.random.seed(seed)
 torch.random.manual_seed(seed)
 
@@ -27,7 +27,8 @@ X_all = pkl.load(open('../experimental_features.pkl', 'rb'))  # numpy.ndarray (5
 # preprocess
 # TODO: use cuda or gpu
 # device = torch.device('cuda')
-device = torch.device('cpu')
+device = torch.device(args.dev)
+print(device)
 X_all = torch.from_numpy(X_all).to(device)
 
 supports = preprocess_adj(adj)
@@ -82,10 +83,11 @@ for epoch in range(args.epochs):
         print(epoch, loss.item(), acc.item())
 
 # TODO: save parameters
-net.eval()
+torch.save(net.state_dict(), './data/params.pkl')
+'''net.eval()
 
 out = net((X_all, support))
 logits = out[0]
 y_pred = torch.argmax(logits[test_mask], dim=1)
-print('y_pred:', y_pred)
+print('y_pred:', y_pred)'''
 
