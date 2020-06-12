@@ -11,7 +11,7 @@ from torch import optim
 from config import args
 
 # TODO: feel free to change lr & seed
-lr = args.attack_lr
+lr = args.lr
 lr_decay = 0.9
 seed = args.seed
 np.random.seed(seed)
@@ -73,8 +73,8 @@ support = torch.sparse.DoubleTensor(i.t(), v, adj_shape)
 # train attack nodes features              #
 ############################################
 def max_loss(logits, test_labels, dev):
-    # a = F.softmax(logits, dim=1).to(dev)
-    a = logits
+    a = F.softmax(logits, dim=1).to(dev)
+    # a = logits
     loss = torch.sum(torch.max(a, dim=1)[0] - a[range(len(test_labels)), test_labels]).to(dev)
     # bug fixed: didn't flush loss to device
     return loss
@@ -87,9 +87,9 @@ print(device)
 sigma = args.sigma
 mu = args.mu
 if args.init_z == 'randn':
-    z = (sigma * torch.randn((size_attack, feature_dim)) - mu).double()
+    z = (sigma * torch.randn((size_attack, feature_dim)) + mu).double()
 else:
-    z = (sigma * torch.rand((size_attack, 100)) - mu).double()
+    z = (sigma * torch.rand((size_attack, 100)) + mu).double()
 # z = torch.zeros((size_attack, feature_dim)).double()
 # z[:, 0] += 1
 # print('z[0] variance:', torch.var(z[0]).item())
@@ -113,7 +113,7 @@ test_logits_mask = (test_label_mask + num_train_val).to(device)
 
 print('start')
 print('z[0]:', z[0])
-for epoch in range(args.attack_epochs):
+for epoch in range(args.epochs):
     epoch += 1
     print('epoch:', epoch)
 
@@ -134,7 +134,7 @@ for epoch in range(args.attack_epochs):
     if epoch % 5 == 0:
         lr = lr * lr_decay
     z.data += lr * dz  # bug: 'z += lr * dz'; optimizer.step() is OK either
-    z.data = torch.clamp(z.data, -99.99, 99.99)
+    z.data = torch.clamp(z.data, args.minf, args.maxf)
 
     acc = (torch.argmax(logits[test_logits_mask], dim=1) == y_test[test_label_mask]).double().mean()
     print('test acc:', acc.item())
